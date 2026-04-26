@@ -415,7 +415,7 @@ for iteration in range(1, max_iterations + 1):
     max_vr_change = np.max(np.abs(v_r_new - v_r))
     max_vth_change = np.max(np.abs(v_theta_new - v_theta))
 
-    print(f"Iteration {iteration}: change_vr={max_vr_change:.3e}, change_vth={max_vth_change:.3e}")
+    log(f"Iteration {iteration}: change_vr={max_vr_change:.3e}, change_vth={max_vth_change:.3e}")
 
     # Set velocity field for next Picard iteration
     v_r = v_r_new
@@ -424,12 +424,24 @@ for iteration in range(1, max_iterations + 1):
     if max_vr_change < tolerance and max_vth_change < tolerance:
         log(f"Picard iteration converged after {iteration} iterations. Max vr change: {max_vr_change}, Max vtheta change: {max_vth_change}")
         break
-
+ 
 if iteration == max_iterations:
     log(f"Picard iteration did not converge after {max_iterations} iterations. Max vr change: {max_vr_change}, Max vtheta change: {max_vth_change}")
     sys.exit(1)
 
 # 8. Post-processing
+
+# Inspect shear rate and viscosity at blade-tip-adjacent fluid nodes (one cell radially
+# outside the blade tip, sampled at three angular positions: tip-center, +theta corner, −theta corner).
+i_tip = int(round((r_blade_tip - r_min) / dr)) + 1 # one fluid node above r=r_blade_tip
+j_center_b1 = 0 # theta=0, center of blade 1's tip
+j_plus_b1 = int(round(theta_blade_tip / dtheta)) + 1 # just past +theta corner of blade 1
+j_minus_b1 = N_theta - j_plus_b1 # just past −theta corner (wrap)
+for j_probe, label in [(j_center_b1, 'tip-center'), (j_plus_b1, '+θ corner'), (j_minus_b1, '−θ corner')]:
+    gd = shear_rate[i_tip - 1, j_probe]    # shear_rate has shape (N_r-2, N_theta)
+    mv = mu_full[i_tip, j_probe]
+    print(f"Blade-tip probe ({label}, r={r_arr[i_tip]:.3f} m, θ={np.rad2deg(theta_arr[j_probe]):.1f}°): "
+          f"γ̇ = {gd:.3e} 1/s, μ = {mv:.3e} Pa·s")
 
 # Expand theta domain to 2pi (skip the duplicated pi boundary node so this matches the mirrored field arrays below)
 theta_full = np.concatenate([theta_arr, theta_arr[1:] + np.pi])  # 0 to 2pi
@@ -479,9 +491,13 @@ ax.set_thetamin(0); ax.set_thetamax(360)
 plt.colorbar(c, label='μ (Pa·s)')
 ax.set_title(f'Apparent viscosity for Ω={omega/(2*np.pi)*60:.2f} RPM')
 
-# Flow-driven pressure field
+# Flow-driven pressure field. The collocated-grid scheme admits a high-frequency
+# checkerboard pressure null mode that contaminates the visualization but does
+# not affect the velocity solution. Smooth it out for plotting only.
+from scipy.ndimage import uniform_filter
+P_full_plot = uniform_filter(P_full, size=3, mode='nearest')
 fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
-c = ax.pcolormesh(theta_full, r_arr, P_full, cmap='inferno')
+c = ax.pcolormesh(theta_full, r_arr, P_full_plot, cmap='inferno')
 ax.set_thetamin(0); ax.set_thetamax(360)
 plt.colorbar(c, label='P (Pa)')
 ax.set_title(f'Flow-driven pressure field for Ω={omega/(2*np.pi)*60:.2f} RPM')
@@ -547,6 +563,14 @@ Re_field = np.full_like(mu_full, np.nan)
 fluid = ~is_solid
 Re_field[fluid] = rho * np.sqrt(v_r[fluid]**2 + v_theta[fluid]**2) * r[fluid] / mu_full[fluid]
 print(f"Max Re = {np.nanmax(Re_field):.3f}")
+
+# Reynolds number field, mirrored to full 360°
+Re_field_full = np.concatenate([Re_field, Re_field[:, 1:]], axis=1)
+fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
+c = ax.pcolormesh(theta_full, r_arr, Re_field_full, cmap='viridis')
+ax.set_thetamin(0); ax.set_thetamax(360)
+plt.colorbar(c, label='Re')
+ax.set_title(f'Local Reynolds number for Ω={omega/(2*np.pi)*60:.2f} RPM, (max = {np.nanmax(Re_field_full):.2f})')
 
 log("Done!")
 plt.show()
